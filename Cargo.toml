@@ -1,5 +1,13 @@
 [workspace]
-members = ["inkview", "inkview-eg", "inkview-slint", "inkview-slint-demo"]
+members = [
+    "inkview",
+    "inkview-eg",
+    "inkview-slint",
+    "inkview-slint-demo",
+    "pb-devtools",
+    "pb-devtools-client",
+    "pb-devtools-daemon",
+]
 resolver = "2"
 
 [profile.release]

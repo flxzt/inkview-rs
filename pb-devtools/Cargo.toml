@@ -1,0 +1,23 @@
+[package]
+edition = "2021"
+name = "pb-devtools"
+version = "0.1.0"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+inkview = { path = "../inkview" }
+redlight = { path = "../../../redlight" }
+thiserror = "1.0"
+tokio = { version = "1.36", features = [
+    "full",
+] } # TODO: only enable needed features
+tokio-util = { version = "0.7", features = [
+    "full",
+] } # TODO: only enable needed features
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+
+[features]
+sdk-5-19 = ["inkview/sdk-5-19"]
+sdk-6-5 = ["inkview/sdk-6-5"]
