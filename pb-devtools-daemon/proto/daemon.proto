@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package daemon;
+
+service Daemon {
+    rpc PrintStatus(PrintStatusRequest) returns (PrintStatusReply) {}
+    rpc ReportStatus(ReportStatusRequest) returns (ReportStatusReply) {}
+}
+
+message PrintStatusRequest {}
+message PrintStatusReply {}
+message ReportStatusRequest {}
+message ReportStatusReply {
+    string status = 1;
+}
