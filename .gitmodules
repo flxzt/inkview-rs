@@ -1,0 +1,3 @@
+[submodule "pocketbook-sdks"]
+	path = pocketbook-sdks
+	url = https://github.com/flxzt/pocketbook-sdks
