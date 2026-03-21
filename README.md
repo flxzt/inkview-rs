@@ -52,28 +52,18 @@ To build an example:
 just pb_sdk_version=<sdk-version> build-example <crate> <name>
 ```
 
-## Transfer a binary
+## Deploy a binary
 
-To transfer a built binary to the device over USB, run the following,  
+To deploy a built binary to the device over USB, run the following,  
 assuming the device is connected and appears in path `/run/media/$USER/<pb-device>`:
 
 The path argument is the relative path from `target/armv7-unknown-linux-gnueabi/<cargo-profile>`,  
 so for example: `examples/hello_world`
 
 ```bash
-just pb_device=<your-device> transfer-app-usb <path-to-binary> <target-name>
+just pb_device=<your-device> deploy-usb <path-to-binary> <target-name>
 ```
 
 ## Generate bindings
 
-Clone the SDK from here: https://github.com/pocketbook/SDK_6.3.0 and place it next to the `inkview-rs` folder.
-
-There are currently bindings for the following SDK versions:
-- `v5.19` : accessed by switching to the `5.19` branch
-- `v6.5` : accessed by switching to the `6.5` branch
-- `v6.8` : accessed by downloading the archive from the releases of the repository
-
-Execute the following from the `inkview-rs` directory to regenerate the bindings.
-```bash
-just pb_sdk_version=<sdk-version> generate-bindings
-```
+See documentation for the `generate-bindings` just recipe.

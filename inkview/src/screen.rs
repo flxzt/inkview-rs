@@ -149,6 +149,7 @@ impl<'a> Screen<'a> {
     // DyanmicUpdateBW:       1,    2
     // DyanmicUpdateA2:       0xe6, 0 and 0xef, 1
     // ExitUpdateE2:          0xe7, 0
+    #[cfg(any(feature = "sdk-5-19", feature = "sdk-6-5", feature = "sdk-6-8"))]
     pub fn do_partial_update(&mut self, x: i32, y: i32, w: u32, h: u32, flags: u32, dynamic: bool) {
         unsafe {
             self.iv.do_partial_update(

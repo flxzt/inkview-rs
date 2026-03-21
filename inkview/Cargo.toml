@@ -18,15 +18,16 @@ num-derive = "0.4"
 num-traits = "0.2"
 
 [features]
-default = ["sdk-6-8"]
+default = ["sdk-6-10"]
 sdk-5-19 = ["_sdk_selected"]
 sdk-6-5 = ["_sdk_selected"]
 sdk-6-8 = ["_sdk_selected"]
+sdk-6-10 = ["_sdk_selected"]
 
 _sdk_selected = []
 
 [package.metadata.docs.rs]
-features = ["sdk-6-8"]
+features = ["sdk-6-10"]
 
 [package.metadata.git-cliff.changelog]
 # A Tera template to be rendered as the changelog's header.

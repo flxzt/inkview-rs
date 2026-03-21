@@ -21,6 +21,11 @@ mod bindings_6_8;
 #[cfg(feature = "sdk-6-8")]
 pub use bindings_6_8::*;
 
+#[cfg(feature = "sdk-6-10")]
+mod bindings_6_10;
+#[cfg(feature = "sdk-6-10")]
+pub use bindings_6_10::*;
+
 pub use inkview as Inkview;
 
 unsafe impl Send for inkview {}
