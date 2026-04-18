@@ -20,13 +20,14 @@ embedded-graphics = "0.8.1"
 anyhow = "1.0"
 
 [features]
-default = ["sdk-6-8"]
+default = ["sdk-6-10"]
 sdk-5-19 = ["inkview/sdk-5-19"]
 sdk-6-5 = ["inkview/sdk-6-5"]
 sdk-6-8 = ["inkview/sdk-6-8"]
+sdk-6-10 = ["inkview/sdk-6-10"]
 
 [package.metadata.docs.rs]
-features = ["sdk-6-8"]
+features = ["sdk-6-10"]
 
 [package.metadata.git-cliff.changelog]
 # A Tera template to be rendered as the changelog's header.
