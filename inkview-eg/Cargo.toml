@@ -13,10 +13,10 @@ authors = ["flxzt"]
 
 [dependencies]
 inkview = { path = "../inkview", version = "0.3.0", default-features = false}
-embedded-graphics-core = "0.4.0"
+embedded-graphics-core = "0.4.1"
 
 [dev-dependencies]
-embedded-graphics = "0.8.1"
+embedded-graphics = "0.8.2"
 anyhow = "1.0"
 
 [features]
