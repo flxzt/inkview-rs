@@ -3,6 +3,15 @@
 let
   # Target package set for the armv7 PocketBook runtime environment
   pkgsCross = pkgs.pkgsCross.armv7l-hf-multiplatform;
+  craneLib = inputs.crane.mkLib pkgs;
+  bindgenArgs = {
+    src = inputs.rust-bindgen;
+    strictDeps = true;
+    doCheck = false;
+  };
+  bindgen = craneLib.buildPackage (bindgenArgs // {
+    cargoArtifacts = craneLib.buildDepsOnly bindgenArgs;
+  });
 in
 {
   # https://devenv.sh/packages/
@@ -15,6 +24,8 @@ in
     # Native cross-compilation toolchain
     pkgs.zig
     pkgs.cargo-zigbuild
+
+    bindgen
 
     # Use the target-specific cross-pkg-config tool
     pkgsCross.buildPackages.pkg-config
