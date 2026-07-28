@@ -1,7 +1,5 @@
-use inkview::event::Key;
-use inkview::screen::RGB24;
-use inkview::{screen::Screen, Event};
-use rgb::RGB;
+use inkview::screen::PixelFormat;
+use inkview::{event::Key, screen::Screen, Event};
 use slint::platform::{
     software_renderer::{self as renderer, PhysicalRegion},
     WindowEvent,
@@ -13,13 +11,28 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub struct Backend {
-    screen: RefCell<Screen<'static>>,
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+struct Pixel<P>(P);
+
+impl<P: PixelFormat + Copy> TargetPixel for Pixel<P> {
+    fn blend(&mut self, color: renderer::PremultipliedRgbaColor) {
+        let other = P::from_rgb24(color.red, color.green, color.blue);
+        let by = u8::MAX - color.alpha;
+        *self = Pixel(self.0.mix(other, by));
+    }
+
+    fn from_rgb(red: u8, green: u8, blue: u8) -> Self {
+        Self(P::from_rgb24(red, green, blue))
+    }
+}
+
+pub struct Backend<P: 'static> {
+    screen: RefCell<Screen<'static, P>>,
     evts: Receiver<Event>,
     width: usize,
     height: usize,
     window: RefCell<Option<Rc<renderer::MinimalSoftwareWindow>>>,
-    buffer: RefCell<Vec<RGB<u8>>>,
+    buffer: RefCell<Vec<Pixel<P>>>,
 }
 
 impl Backend {
@@ -50,13 +63,13 @@ fn rect_from_phys(r: PhysicalRegion) -> euclid::Rect<i32, euclid::UnknownUnit> {
     )
 }
 
-fn scale_from_screen(screen: &Screen) -> f32 {
+fn scale_from_screen<P: 'static>(screen: &Screen<P>) -> f32 {
     let dpi = screen.dpi() as f32 / 100.0;
 
     return dpi * screen.scale();
 }
 
-impl slint::platform::Platform for Backend {
+impl<P: PixelFormat + Copy> slint::platform::Platform for Backend<P> {
     fn create_window_adapter(
         &self,
     ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
@@ -83,11 +96,10 @@ impl slint::platform::Platform for Backend {
             .unwrap()
             .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor });
 
-        // bad naming, oops
-        let mut fulfill_dynamic_updates_after: Option<Instant> = None;
-        let mut dynamic_region_to_redraw: Option<euclid::Rect<i32, euclid::UnknownUnit>> = None;
-        let mut accumulated_updates: Option<euclid::Rect<i32, euclid::UnknownUnit>> = None;
-        let mut last_draw_at = Instant::now();
+        let mut perform_full_redraw_over_dynamic_regions_after: Option<Instant> = None;
+        let mut regions_updated_dynamically_in_need_of_redraw: Option<
+            euclid::Rect<i32, euclid::UnknownUnit>,
+        > = None;
 
         loop {
             slint::platform::update_timers_and_animations();
@@ -98,11 +110,10 @@ impl slint::platform::Platform for Backend {
                 } else {
                     match (
                         slint::platform::duration_until_next_timer_update(),
-                        fulfill_dynamic_updates_after.map(|i| i.duration_since(Instant::now())),
+                        perform_full_redraw_over_dynamic_regions_after.map(|i| i.elapsed()),
                     ) {
                         (Some(a), Some(b)) => Some(a.min(b)),
-                        (Some(a), None) => Some(a),
-                        (_, b) => b,
+                        (a, b) => Some(a.or(b).unwrap_or(Duration::from_millis(1000))),
                     }
                 };
 
@@ -114,10 +125,13 @@ impl slint::platform::Platform for Backend {
                     self.evts.recv().ok().and_then(convert_evt)
                 };
 
-                if let Some(redraw_region) = dynamic_region_to_redraw {
-                    if last_draw_at.elapsed() > Duration::from_millis(200) {
-                        dynamic_region_to_redraw = None;
-                        fulfill_dynamic_updates_after = None;
+                if let (Some(redraw_region), Some(perform_full_redraw_after)) = (
+                    regions_updated_dynamically_in_need_of_redraw,
+                    perform_full_redraw_over_dynamic_regions_after,
+                ) {
+                    if perform_full_redraw_after < Instant::now() {
+                        perform_full_redraw_over_dynamic_regions_after = None;
+                        regions_updated_dynamically_in_need_of_redraw = None;
 
                         let mut screen = self.screen.borrow_mut();
                         screen.partial_update(
@@ -126,13 +140,14 @@ impl slint::platform::Platform for Backend {
                             redraw_region.width() as u32,
                             redraw_region.height() as u32,
                         );
-                        last_draw_at = Instant::now();
                     }
                 }
 
-                slint::platform::update_timers_and_animations();
-
                 if let Some(evt) = evt {
+                    window.dispatch_event(evt);
+                }
+
+                while let Some(evt) = self.evts.try_recv().ok().and_then(convert_evt) {
                     window.dispatch_event(evt);
                 }
 
@@ -147,38 +162,35 @@ impl slint::platform::Platform for Backend {
                             let y = damage.bounding_box_origin().y + dy as i32;
                             let idx = y as usize * self.width + x as usize;
                             let c = buffer[idx];
-                            screen.draw(x as usize, y as usize, RGB24(c.r, c.g, c.b));
+                            screen.draw(x as usize, y as usize, c.0);
                         }
                     }
 
                     // println!("Drawing to: {:?}", damage);
 
                     if screen.is_updating() {
-                        if let Some(r) = accumulated_updates.as_mut() {
-                            *r = r.union(&rect_from_phys(damage.clone()));
-                        } else {
-                            accumulated_updates = Some(rect_from_phys(damage.clone()));
-                        }
+                        println!(
+                            "  Slint partial update full redraw, now={:?}",
+                            Instant::now()
+                        );
+                        screen.partial_update(
+                            damage.bounding_box_origin().x,
+                            damage.bounding_box_origin().y,
+                            damage.bounding_box_size().width,
+                            damage.bounding_box_size().height,
+                        );
 
-                        if last_draw_at.elapsed() > Duration::from_millis(20) {
-                            let redraw_region = accumulated_updates.take().unwrap();
-                            screen.dynamic_update(
-                                redraw_region.origin.x,
-                                redraw_region.origin.y,
-                                redraw_region.width() as u32,
-                                redraw_region.height() as u32,
-                            );
-                            last_draw_at = Instant::now();
-                        }
-
-                        if let Some(r) = dynamic_region_to_redraw.as_mut() {
+                        if let Some(r) = regions_updated_dynamically_in_need_of_redraw.as_mut() {
                             *r = r.union(&rect_from_phys(damage));
                         } else {
-                            dynamic_region_to_redraw = Some(rect_from_phys(damage));
+                            regions_updated_dynamically_in_need_of_redraw =
+                                Some(rect_from_phys(damage));
                         }
 
-                        fulfill_dynamic_updates_after =
-                            Some(Instant::now() + Duration::from_millis(200));
+                        if perform_full_redraw_over_dynamic_regions_after.is_none() {
+                            perform_full_redraw_over_dynamic_regions_after =
+                                Some(Instant::now() + Duration::from_millis(200));
+                        }
                     } else {
                         screen.partial_update(
                             damage.bounding_box_origin().x,
@@ -186,7 +198,6 @@ impl slint::platform::Platform for Backend {
                             damage.bounding_box_size().width,
                             damage.bounding_box_size().height,
                         );
-                        last_draw_at = Instant::now();
                     }
                 });
             }

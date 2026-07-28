@@ -4,16 +4,20 @@ use crate::{bindings::icanvas_s, bindings::Inkview};
 use core::ffi::c_int;
 use core::fmt::Display;
 use num_traits::{FromPrimitive, ToPrimitive};
+use std::marker::PhantomData;
 
-pub trait PixelFormat {
+pub trait PixelFormat: Sized {
     fn to_bb8(&self) -> BB8;
     fn to_rgb24(&self) -> RGB24;
+    fn from_rgb24(r: u8, g: u8, b: u8) -> Self;
+    fn mix(&self, other: Self, by: u8) -> Self;
+    fn draw_to_screen(&self, screen: &mut Screen<Self>, x: usize, y: usize);
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct BB8(pub u8);
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct RGB24(pub u8, pub u8, pub u8);
 
 impl PixelFormat for BB8 {
@@ -23,6 +27,22 @@ impl PixelFormat for BB8 {
 
     fn to_rgb24(&self) -> RGB24 {
         RGB24(self.0, self.0, self.0)
+    }
+
+    fn from_rgb24(r: u8, g: u8, b: u8) -> Self {
+        RGB24(r, g, b).to_bb8()
+    }
+
+    fn mix(&self, other: Self, by: u8) -> Self {
+        Self((self.0 as u16 * (by as u16) / 255) as u8 + other.0)
+    }
+
+    fn draw_to_screen(&self, screen: &mut Screen<Self>, x: usize, y: usize) {
+        let i: usize = screen.stride * y + x;
+        let BB8(p) = self.to_bb8();
+        unsafe {
+            screen.buf.add(i).write(p);
+        }
     }
 }
 
@@ -35,9 +55,32 @@ impl PixelFormat for RGB24 {
     fn to_rgb24(&self) -> RGB24 {
         *self
     }
+
+    fn from_rgb24(r: u8, g: u8, b: u8) -> Self {
+        Self(r, g, b)
+    }
+
+    fn mix(&self, other: Self, by: u8) -> Self {
+        let a = by as u16;
+        let r = (self.0 as u16 * a / 255) as u8 + other.0;
+        let g = (self.1 as u16 * a / 255) as u8 + other.1;
+        let b = (self.2 as u16 * a / 255) as u8 + other.2;
+        Self(r, g, b)
+    }
+
+    fn draw_to_screen(&self, screen: &mut Screen<Self>, x: usize, y: usize) {
+        let i = screen.stride * y + x * 3;
+        let RGB24(r, g, b) = self.to_rgb24();
+
+        unsafe {
+            screen.buf.add(i).write(r);
+            screen.buf.add(i + 1).write(g);
+            screen.buf.add(i + 2).write(b);
+        }
+    }
 }
 
-pub struct Screen<'a> {
+pub struct Screen<'a, P: 'static> {
     iv: &'a Inkview,
 
     #[allow(unused)]
@@ -50,9 +93,16 @@ pub struct Screen<'a> {
     dpi: u32,
     scale: f32,
     depth: u8,
+
+    _phantom: PhantomData<&'static P>,
 }
 
-impl<'a> Screen<'a> {
+pub enum WhichScreen<'a> {
+    BB8(Screen<'a, BB8>),
+    RGB24(Screen<'a, RGB24>),
+}
+
+impl<'a> WhichScreen<'a> {
     pub fn new(iv: &'a Inkview) -> Self {
         unsafe {
             iv.SetCurrentApplicationAttribute(APPLICATION_ATTRIBUTE_APPLICATION_READER, 1);
@@ -72,10 +122,10 @@ impl<'a> Screen<'a> {
         .expect("Failed to get a framebuffer (task framebuffer and GetCanvas both null).");
         dbg!(fb.depth);
 
-        let depth = fb.depth;
+        let depth = (fb.depth >> 3) as u8;
 
-        let dpi = unsafe { iv.get_screen_dpi() };
-        let scale = unsafe { iv.get_screen_scale_factor() };
+        let dpi = unsafe { iv.get_screen_dpi() as u32 };
+        let scale = unsafe { iv.get_screen_scale_factor() as f32 };
 
         dbg!(dpi, scale);
 
@@ -84,46 +134,52 @@ impl<'a> Screen<'a> {
         let stride = fb.scanline as usize;
         let buf = fb.addr;
 
-        Self {
-            iv,
-            fb,
-            width,
-            height,
-            stride,
-            buf,
-            dpi: dpi as u32,
-            scale: scale as f32,
-            depth: (depth >> 3) as u8,
+        if depth == 1 {
+            WhichScreen::BB8(Screen {
+                iv,
+                fb,
+                width,
+                height,
+                stride,
+                buf,
+                dpi,
+                scale,
+                depth,
+                _phantom: PhantomData,
+            })
+        } else {
+            WhichScreen::RGB24(Screen {
+                iv,
+                fb,
+                width,
+                height,
+                stride,
+                buf,
+                dpi,
+                scale,
+                depth,
+                _phantom: PhantomData,
+            })
         }
     }
+}
 
-    pub fn clear(&mut self) {
-        unsafe {
-            self.iv.ClearScreen();
-        }
-    }
 
+impl<'a, P: PixelFormat> Screen<'a, P> {
     #[inline(always)]
-    pub fn draw<P: PixelFormat>(&mut self, x: usize, y: usize, c: P) {
+    pub fn draw(&mut self, x: usize, y: usize, c: P) {
         if !(0..self.width).contains(&x) || !(0..self.height).contains(&y) {
             return;
         }
 
-        if self.depth == 1 {
-            let i = self.stride * y + x;
-            let BB8(p) = c.to_bb8();
-            unsafe {
-                self.buf.add(i).write(p);
-            }
-        } else {
-            let i = self.stride * y + x * 3;
-            let RGB24(r, g, b) = c.to_rgb24();
+        c.draw_to_screen(self, x, y);
+    }
+}
 
-            unsafe {
-                self.buf.add(i).write(r);
-                self.buf.add(i + 1).write(g);
-                self.buf.add(i + 2).write(b);
-            }
+impl<'a, P> Screen<'a, P> {
+    pub fn clear(&mut self) {
+        unsafe {
+            self.iv.ClearScreen();
         }
     }
 
