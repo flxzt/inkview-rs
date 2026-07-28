@@ -1,13 +1,13 @@
 use inkview::screen::PixelFormat;
-use inkview::{event::Key, screen::Screen, Event};
+use inkview::{event::Key, screen::Screen};
 use slint::platform::{
-    software_renderer::{self as renderer, PhysicalRegion},
-    WindowEvent,
+    EventLoopProxy, WindowEvent,
+    software_renderer::{self as renderer, PhysicalRegion, TargetPixel},
 };
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::mpsc::Receiver,
+    sync::mpsc::{Receiver, Sender},
     time::{Duration, Instant},
 };
 
@@ -26,17 +26,53 @@ impl<P: PixelFormat + Copy> TargetPixel for Pixel<P> {
     }
 }
 
+pub enum Event {
+    InkviewEvent(inkview::Event),
+    Callback(Box<dyn FnOnce() + Send>),
+    Quit,
+}
+
+#[derive(Clone)]
+struct Proxy {
+    queue: Sender<Event>,
+}
+
+impl EventLoopProxy for Proxy {
+    fn quit_event_loop(&self) -> Result<(), slint::EventLoopError> {
+        self.queue
+            .send(Event::Quit)
+            .map_err(|_| slint::EventLoopError::EventLoopTerminated)?;
+        Ok(())
+    }
+
+    fn invoke_from_event_loop(
+        &self,
+        event: Box<dyn FnOnce() + Send>,
+    ) -> Result<(), slint::EventLoopError> {
+        self.queue
+            .send(Event::Callback(event))
+            .map_err(|_| slint::EventLoopError::EventLoopTerminated)?;
+        Ok(())
+    }
+}
+
 pub struct Backend<P: 'static> {
     screen: RefCell<Screen<'static, P>>,
-    evts: Receiver<Event>,
+    sender: Sender<Event>,
+    receiver: Receiver<Event>,
     width: usize,
     height: usize,
     window: RefCell<Option<Rc<renderer::MinimalSoftwareWindow>>>,
     buffer: RefCell<Vec<Pixel<P>>>,
 }
 
-impl Backend {
-    pub fn new(screen: Screen<'static>, evts: Receiver<Event>) -> Self {
+impl<P: Default + Copy> Backend<P> {
+    /// Create a new backend. Sender and Receiver must be of the same channel.
+    pub fn new(
+        screen: Screen<'static, P>,
+        sender: Sender<Event>,
+        receiver: Receiver<Event>,
+    ) -> Self {
         let width = screen.width();
         let height = screen.height();
 
@@ -44,12 +80,19 @@ impl Backend {
 
         Self {
             screen: screen.into(),
-            evts,
+            sender,
+            receiver,
             width,
             height,
             window: Default::default(),
             buffer: buffer.into(),
         }
+    }
+
+    /// Access the event sender, you can clone this and use it to send in
+    /// inkview events.
+    pub fn event_sender(&self) -> &Sender<Event> {
+        &self.sender
     }
 }
 
@@ -69,6 +112,17 @@ fn scale_from_screen<P: 'static>(screen: &Screen<P>) -> f32 {
     return dpi * screen.scale();
 }
 
+fn handle_event(event: Event) -> Result<Option<inkview::Event>, ()> {
+    match event {
+        Event::InkviewEvent(event) => Ok(Some(event)),
+        Event::Callback(fn_once) => {
+            fn_once();
+            Ok(None)
+        }
+        Event::Quit => Err(()),
+    }
+}
+
 impl<P: PixelFormat + Copy> slint::platform::Platform for Backend<P> {
     fn create_window_adapter(
         &self,
@@ -77,6 +131,12 @@ impl<P: PixelFormat + Copy> slint::platform::Platform for Backend<P> {
             renderer::MinimalSoftwareWindow::new(renderer::RepaintBufferType::ReusedBuffer);
         self.window.replace(Some(window.clone()));
         Ok(window)
+    }
+
+    fn new_event_loop_proxy(&self) -> Option<Box<dyn EventLoopProxy>> {
+        Some(Box::new(Proxy {
+            queue: self.sender.clone(),
+        }))
     }
 
     fn run_event_loop(&self) -> Result<(), slint::PlatformError> {
@@ -118,11 +178,11 @@ impl<P: PixelFormat + Copy> slint::platform::Platform for Backend<P> {
                 };
 
                 let evt = if let Some(delay) = delay {
-                    self.evts.recv_timeout(delay).ok().and_then(convert_evt)
+                    self.receiver.recv_timeout(delay).ok()
                 } else if window.has_active_animations() {
-                    self.evts.try_recv().ok().and_then(convert_evt)
+                    self.receiver.try_recv().ok()
                 } else {
-                    self.evts.recv().ok().and_then(convert_evt)
+                    self.receiver.recv().ok()
                 };
 
                 if let (Some(redraw_region), Some(perform_full_redraw_after)) = (
@@ -143,11 +203,25 @@ impl<P: PixelFormat + Copy> slint::platform::Platform for Backend<P> {
                     }
                 }
 
-                if let Some(evt) = evt {
+                if let Some(evt) = evt
+                    && let Some(evt) = {
+                        let Ok(evt) = handle_event(evt) else {
+                            return Ok(());
+                        };
+                        evt.and_then(convert_evt)
+                    }
+                {
                     window.dispatch_event(evt);
                 }
 
-                while let Some(evt) = self.evts.try_recv().ok().and_then(convert_evt) {
+                while let Some(evt) = self.receiver.try_recv().ok()
+                    && let Some(evt) = {
+                        let Ok(evt) = handle_event(evt) else {
+                            return Ok(());
+                        };
+                        evt.and_then(convert_evt)
+                    }
+                {
                     window.dispatch_event(evt);
                 }
 
@@ -166,13 +240,7 @@ impl<P: PixelFormat + Copy> slint::platform::Platform for Backend<P> {
                         }
                     }
 
-                    // println!("Drawing to: {:?}", damage);
-
                     if screen.is_updating() {
-                        println!(
-                            "  Slint partial update full redraw, now={:?}",
-                            Instant::now()
-                        );
                         screen.partial_update(
                             damage.bounding_box_origin().x,
                             damage.bounding_box_origin().y,
@@ -225,23 +293,23 @@ fn ink_key_to_slint(key: Key) -> Option<slint::platform::Key> {
     }
 }
 
-fn ink_evt_to_slint(scale_factor: f32, evt: Event) -> Option<WindowEvent> {
+fn ink_evt_to_slint(scale_factor: f32, evt: inkview::Event) -> Option<WindowEvent> {
     println!("evt: {:?}", evt);
     let evt = match evt {
-        Event::PointerDown { x, y } => WindowEvent::PointerPressed {
+        inkview::Event::PointerDown { x, y } => WindowEvent::PointerPressed {
             position: slint::PhysicalPosition { x, y }.to_logical(scale_factor),
             button: slint::platform::PointerEventButton::Left,
         },
-        Event::PointerMove { x, y } => WindowEvent::PointerMoved {
+        inkview::Event::PointerMove { x, y } => WindowEvent::PointerMoved {
             position: slint::PhysicalPosition { x, y }.to_logical(scale_factor),
         },
-        Event::PointerUp { x, y } => WindowEvent::PointerReleased {
+        inkview::Event::PointerUp { x, y } => WindowEvent::PointerReleased {
             position: slint::PhysicalPosition { x, y }.to_logical(scale_factor),
             button: slint::platform::PointerEventButton::Left,
         },
-        Event::Foreground { .. } => WindowEvent::WindowActiveChanged(true),
-        Event::Background { .. } => WindowEvent::WindowActiveChanged(false),
-        Event::KeyDown { key } => {
+        inkview::Event::Foreground { .. } => WindowEvent::WindowActiveChanged(true),
+        inkview::Event::Background { .. } => WindowEvent::WindowActiveChanged(false),
+        inkview::Event::KeyDown { key } => {
             if let Some(slint_key) = ink_key_to_slint(key) {
                 WindowEvent::KeyPressed {
                     text: slint_key.into(),
@@ -250,7 +318,7 @@ fn ink_evt_to_slint(scale_factor: f32, evt: Event) -> Option<WindowEvent> {
                 return None;
             }
         }
-        Event::KeyRepeat { key } => {
+        inkview::Event::KeyRepeat { key } => {
             if let Some(slint_key) = ink_key_to_slint(key) {
                 WindowEvent::KeyPressRepeated {
                     text: slint_key.into(),
@@ -259,7 +327,7 @@ fn ink_evt_to_slint(scale_factor: f32, evt: Event) -> Option<WindowEvent> {
                 return None;
             }
         }
-        Event::KeyUp { key } => {
+        inkview::Event::KeyUp { key } => {
             if let Some(slint_key) = ink_key_to_slint(key) {
                 WindowEvent::KeyReleased {
                     text: slint_key.into(),

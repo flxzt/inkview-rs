@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use inkview::Event;
+use inkview::{Event, screen::BB8};
 use slint::{ComponentHandle, Model};
 
 mod ui {
@@ -13,15 +13,19 @@ fn main() {
     let (evt_tx, evt_rx) = std::sync::mpsc::channel();
 
     std::thread::spawn({
+        let evt_tx = evt_tx.clone();
         move || {
-            if evt_rx.recv().unwrap() != Event::Init {
+            if !matches!(
+                evt_rx.recv().unwrap(),
+                inkview_slint::Event::InkviewEvent(Event::Init)
+            ) {
                 panic!("expected init event first");
             }
 
             // I hope this thing lives as long as the process
-            let screen = inkview::screen::Screen::new(iv);
+            let screen = inkview::screen::Screen::<BB8>::new(iv);
 
-            let display = inkview_slint::Backend::new(screen, evt_rx);
+            let display = inkview_slint::Backend::new(screen, evt_tx, evt_rx);
 
             slint::platform::set_platform(Box::new(display)).unwrap();
 
@@ -124,7 +128,10 @@ fn main() {
         move |evt| {
             // println!("got evt: {:?}", evt);
 
-            if evt_tx.send(evt).is_err() {
+            if evt_tx
+                .send(inkview_slint::Event::InkviewEvent(evt))
+                .is_err()
+            {
                 unsafe {
                     iv.CloseApp();
                 }

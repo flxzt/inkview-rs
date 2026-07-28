@@ -92,7 +92,6 @@ pub struct Screen<'a, P: 'static> {
 
     dpi: u32,
     scale: f32,
-    depth: u8,
 
     _phantom: PhantomData<&'static P>,
 }
@@ -144,7 +143,6 @@ impl<'a> WhichScreen<'a> {
                 buf,
                 dpi,
                 scale,
-                depth,
                 _phantom: PhantomData,
             })
         } else {
@@ -157,13 +155,11 @@ impl<'a> WhichScreen<'a> {
                 buf,
                 dpi,
                 scale,
-                depth,
                 _phantom: PhantomData,
             })
         }
     }
 }
-
 
 impl<'a, P: PixelFormat> Screen<'a, P> {
     #[inline(always)]
@@ -177,6 +173,47 @@ impl<'a, P: PixelFormat> Screen<'a, P> {
 }
 
 impl<'a, P> Screen<'a, P> {
+    pub fn new(iv: &'a Inkview) -> Self {
+        unsafe {
+            iv.SetCurrentApplicationAttribute(APPLICATION_ATTRIBUTE_APPLICATION_READER, 1);
+        }
+        // On the emulator the task framebuffer is null, so fall back to the global
+        // canvas (GetCanvas) — the same `icanvas_s`, populated in both environments.
+        // We do this with a plain null-check so it also recovers if a real task
+        // ever hands back a null framebuffer.
+        let fb = unsafe {
+            let task_fb = iv.GetTaskFramebuffer(iv.GetCurrentTask());
+            if task_fb.is_null() {
+                iv.GetCanvas().as_mut()
+            } else {
+                task_fb.as_mut()
+            }
+        }
+        .expect("Failed to get a framebuffer (task framebuffer and GetCanvas both null).");
+
+        let dpi = unsafe { iv.get_screen_dpi() as u32 };
+        let scale = unsafe { iv.get_screen_scale_factor() as f32 };
+
+        dbg!(dpi, scale);
+
+        let width = fb.width as usize;
+        let height = fb.height as usize;
+        let stride = fb.scanline as usize;
+        let buf = fb.addr;
+
+        Screen {
+            iv,
+            fb,
+            width,
+            height,
+            stride,
+            buf,
+            dpi,
+            scale,
+            _phantom: PhantomData,
+        }
+    }
+
     pub fn clear(&mut self) {
         unsafe {
             self.iv.ClearScreen();

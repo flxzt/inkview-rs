@@ -2,18 +2,18 @@ use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::pixelcolor::{Gray8, GrayColor};
 use inkview::bindings;
-use inkview::screen::{Screen, ScreenOrientation, BB8};
+use inkview::screen::{BB8, Screen, ScreenOrientation};
 use std::convert::Infallible;
 
 pub struct InkviewDisplay {
-    iv_screen: Screen<'static>,
+    iv_screen: Screen<'static, BB8>,
     fast_updates_max: usize,
     fast_updates_n: usize,
 }
 
 impl InkviewDisplay {
     pub fn new(iv: &'static bindings::inkview) -> Self {
-        let iv_screen = inkview::screen::Screen::new(iv);
+        let iv_screen = inkview::screen::Screen::<BB8>::new(iv);
 
         Self {
             iv_screen,
@@ -32,11 +32,11 @@ impl InkviewDisplay {
         }
     }
 
-    pub fn iv_screen_ref(&self) -> &Screen<'static> {
+    pub fn iv_screen_ref(&self) -> &Screen<'static, BB8> {
         &self.iv_screen
     }
 
-    pub fn iv_screen_mut(&mut self) -> &mut Screen<'static> {
+    pub fn iv_screen_mut(&mut self) -> &mut Screen<'static, BB8> {
         &mut self.iv_screen
     }
 }
